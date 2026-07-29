@@ -1,0 +1,26 @@
+# --- Datos ---
+# Ignora los datos crudos y procesados (pesados o no redistribuibles).
+# Si quieres versionar una MUESTRA pequeña, añade una excepción abajo.
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# --- R ---
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+
+# --- Sistema ---
+.DS_Store
+Thumbs.db
+
+# --- Entornos / paquetes ---
+renv/library/
+renv/staging/
+
+# --- Salidas pesadas (opcional, descomenta si aplica) ---
+# *.html
+# *.pdf
