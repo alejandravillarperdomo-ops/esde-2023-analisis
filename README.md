@@ -4,7 +4,11 @@ Proyecto de portfolio de análisis de datos aplicado a la [Encuesta de Salud de 
 
 ## Objetivo
 
-*(Describe aquí en 2-3 frases qué pregunta(s) quieres responder con los datos: p. ej. patrones de consumo de alcohol según sexo, edad, clase social, país de nacimiento y CCAA.)*
+El trabajo cubre el proceso completo de análisis de datos: desde la recodificación de las 
+variables originales (procesamiento en R de un fichero con más de 400 variables en formato 
+ancho) hasta el análisis univariante, bivariante y multivariante (Análisis de 
+Correspondencias Múltiples), con el objetivo de identificar patrones significativos y 
+formular hipótesis sobre los factores asociados al tabaquismo en distintos grupos de población.
 
 ## Datos
 
