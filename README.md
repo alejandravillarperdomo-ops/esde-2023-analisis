@@ -84,7 +84,7 @@ Las categorías minoritarias (ej. "no sabe leer o escribir", "75+") son las que 
 estructuran el mapa de asociaciones, mientras que las mayoritarias se concentran cerca 
 del centro.
 
-📄 Informe completo con gráficos: [[`docs/Código_Encuesta_Salud.html`](docs/Código_Encuesta_Salud.html](https://alejandravillarperdomo-ops.github.io/esde-2023-analisis/analisis_encuesta_salud.html))
+📄 Informe completo con gráficos: [📄 Informe completo con gráficos: [Ver informe](https://alejandravillarperdomo-ops.github.io/esde-2023-analisis/C%C3%B3digo_Encuesta_Salud.html))
 ## Autora
 
 Alejandra — [www.linkedin.com/in/alejandra-villar-perdomo-ab041b110]
