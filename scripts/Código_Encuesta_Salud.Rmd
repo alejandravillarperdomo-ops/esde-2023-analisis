@@ -10,6 +10,8 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 ```
 
+## Limpieza y unión de los datos con el diccionario
+
 ```{r setup-funcion-laboral}
 graficar_barras <- function(var, titulo, girar_texto = FALSE, color = "#2C5F7C", horizontal = FALSE, excluir = NULL) {
   p <- df_final %>%
@@ -38,7 +40,7 @@ graficar_barras <- function(var, titulo, girar_texto = FALSE, color = "#2C5F7C",
 }
 ```
 ```{r cargar-datos}
-load("df_final_recodificado_v1.RData")
+load("../data/processed/df_final_recodificado_v1.RData")
 ```
 
 ```{r verificar-carga}
@@ -47,7 +49,7 @@ dim(df_final)
 ```
 ```{r cargar-metadatos}
 library(readxl)
-df_meta <- read_excel("dr_ESdEadulto_2023.xlsx", sheet = "Diseño", skip = 1)
+df_meta <- read_excel("../data/processed/dr_ESdEadulto_2023.xlsx", sheet = "Diseño", skip = 1)
 ```
 
 ```{r limpiar-metadatos}
@@ -207,6 +209,8 @@ table(df_final$NIVEST, useNA = "ifany")
 ```{r check-nrow-1}
 nrow(df_final)
 ```
+## Descripción  del perfil de la  muestra
+
 ## Análisis univariante sociodemográfico
 
 Descripción de las variables de edad, sexo, estado civil, nivel de estudios, país de  nacimiento y años residiendo en España de la muestra.
@@ -686,7 +690,7 @@ El uso de cigarrillos electrónicos es marginal en la muestra: un 93.5% declara 
 ```{r check-nrow-6}
 nrow(df_final)
 ```
-## Análisis bivariante
+## Análisis bivariante del tabaquismo
 
 ```{r fumar-sexo-test}
 tabla <- table(df_final$SEXOa, df_final$Q1_fumar)
@@ -835,6 +839,7 @@ tabla_residencia_pct %>%
   theme_minimal() +
   scale_y_continuous(expand = expansion(mult = c(0, 0.15)))
 ```
+
 El test de chi-cuadrado confirma una relación estadísticamente significativa entre años de residencia en España y el hábito de fumar (X² = 104.08, df = 12, p < 0.001). Se observa un patrón claro: a medida que aumentan los años de residencia, disminuye el porcentaje de quienes nunca han fumado (del 79.3% con 0-5 años, hasta el 51% con más de 30 años) y aumenta tanto el porcentaje de exfumadores (del 9.5% al 26.3%) como el de fumadores diarios (del 8.5% al 18.6%). Este patrón sugiere un efecto de aculturación: cuanto más tiempo lleva una persona residiendo en España, más se aproxima su comportamiento respecto al tabaco al de la población general del país, posiblemente adoptando hábitos de consumo más similares a los locales con el paso del tiempo.
 
 ```{r}
