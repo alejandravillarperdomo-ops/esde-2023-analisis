@@ -1,0 +1,951 @@
+---
+title: "Encuesta_Salud_2023"
+output: html_document
+date: "2026-08-03"
+editor_options: 
+  chunk_output_type: console
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+```{r setup-funcion-laboral}
+graficar_barras <- function(var, titulo, girar_texto = FALSE, color = "#2C5F7C", horizontal = FALSE, excluir = NULL) {
+  p <- df_final %>%
+    count(!!sym(var)) %>%
+    filter(!is.na(!!sym(var))) %>%
+    filter(if (!is.null(excluir)) !(!!sym(var) %in% excluir) else TRUE) %>%
+    mutate(porcentaje = 100 * n / sum(n)) %>%
+    ggplot(aes(x = !!sym(var), y = porcentaje)) +
+    geom_col(fill = color) +
+    geom_text(aes(label = paste0(round(porcentaje, 1), "%")),
+              vjust = if (horizontal) 0.5 else -0.5,
+              hjust = if (horizontal) -0.1 else 0.5,
+              size = 3.5) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+    labs(title = titulo, x = NULL, y = "Porcentaje (%)") +
+    theme_minimal() +
+    theme(plot.margin = margin(t = 10, r = 60, b = 10, l = 10))
+
+  if (horizontal) {
+    p <- p + coord_flip()
+  } else if (girar_texto) {
+    p <- p + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  }
+
+  p
+}
+```
+```{r cargar-datos}
+load("df_final_recodificado_v1.RData")
+```
+
+```{r verificar-carga}
+ls()
+dim(df_final)
+```
+```{r cargar-metadatos}
+library(readxl)
+df_meta <- read_excel("dr_ESdEadulto_2023.xlsx", sheet = "Diseño", skip = 1)
+```
+
+```{r limpiar-metadatos}
+library(stringr)
+
+df_meta_limpio <- df_meta %>%
+  filter(
+    !is.na(Variable),
+    !str_detect(Variable, "^\\*\\*\\*"),
+    !str_starts(Variable, fixed("("))
+  )
+```
+```{r vision-general}
+glimpse(df_final)
+```
+```{r verificacion-tipos}
+library(dplyr)
+tipos_r <- data.frame(
+  variable = names(df_final),
+  tipo_r = sapply(df_final, class)
+)
+comparacion <- df_meta_limpio %>%
+  select(Variable, Tipo) %>%
+  left_join(tipos_r, by = c("Variable" = "variable")) %>%
+  mutate(
+    tipo_esperado = case_when(
+      Tipo == "A" ~ "character/factor",
+      Tipo == "N" ~ "numeric",
+      TRUE ~ "revisar"
+    ),
+    ok = case_when(
+      Tipo == "A" & tipo_r %in% c("character", "factor") ~ TRUE,
+      Tipo == "N" & tipo_r == "numeric" ~ TRUE,
+      TRUE ~ FALSE
+    )
+  )
+comparacion %>% filter(!ok)
+variables_afectadas <- comparacion %>%
+  filter(!ok) %>%
+  pull(Variable) %>%
+  na.omit() %>%
+  intersect(names(df_final))
+
+variables_afectadas <- setdiff(variables_afectadas, c("H4", "I2"))
+
+resultado <- df_final %>%
+  select(all_of(variables_afectadas)) %>%
+  lapply(function(x) unique(x)[!grepl("^[0-9]*\\.?[0-9]*$", unique(x))])
+
+sapply(resultado, function(x) paste(x, collapse = ", "))
+```
+```{r corregir-tipos-numericos}
+df_final <- df_final %>%
+  mutate(across(all_of(variables_afectadas), ~ {
+    x <- as.character(.)
+    x[x == "No contesta"] <- NA
+    as.numeric(x)
+  }))
+```
+```{r revisar-desplazamiento}
+df_final %>% select(H3, H4, I2) %>% lapply(unique)
+```
+```{r corregir-i2}
+df_final <- df_final %>%
+  mutate(I2 = {
+    x <- as.character(I2)
+    x[x == "No contesta"] <- NA
+    as.numeric(x)
+  })
+```
+```{r corregir-h4}
+df_final <- df_final %>%
+  mutate(H4 = factor(
+    as.character(H4),
+    levels = c("Nada satisfactorio", "2", "3", "4", "5", "6", "Muy satisfactorio"),
+    ordered = TRUE
+  ))
+```
+```{r reverificar-final}
+tipos_r <- data.frame(
+  variable = names(df_final),
+  tipo_r = sapply(df_final, function(x) class(x)[1])
+)
+
+comparacion <- df_meta_limpio %>%
+  select(Variable, Tipo) %>%
+  left_join(tipos_r, by = c("Variable" = "variable")) %>%
+  mutate(
+    tipo_esperado = case_when(
+      Tipo == "A" ~ "character/factor",
+      Tipo == "N" ~ "numeric",
+      TRUE ~ "revisar"
+    ),
+    ok = case_when(
+      Tipo == "A" & tipo_r %in% c("character", "factor") ~ TRUE,
+      Tipo == "N" & tipo_r == "numeric" ~ TRUE,
+      Tipo == "N" & tipo_r == "ordered" ~ TRUE,
+      TRUE ~ FALSE
+    )
+  )
+
+comparacion %>% filter(!ok)
+```
+
+```{r crear-grupos-edad}
+# Comprobar que no queda ningún código de "no contesta" sin convertir
+summary(df_final$EDADa)
+
+df_final <- df_final %>%
+  mutate(
+    grupo_edad = cut(
+      EDADa,
+      breaks = c(14, 24, 44, 64, 74, 120),
+      labels = c("15-24", "25-44", "45-64", "65-74", "75+"),
+      right = TRUE
+    )
+  )
+
+table(df_final$grupo_edad, useNA = "ifany")
+```
+```{r crear-nacionalidad}
+df_final <- df_final %>%
+  mutate(
+    nacionalidad = case_when(
+      A2a_1 == "Sí" ~ "Española",
+      A2a_2 == "Sí" ~ "Extranjera",
+      A2a_3 == "Sí" ~ "No contesta",
+      TRUE ~ NA_character_
+    )
+  )
+
+table(df_final$nacionalidad, useNA = "ifany")
+```
+```{r revisar-estado-civil-estudios}
+df_final %>% select(A5, NIVEST) %>% lapply(function(x) levels(as.factor(x)))
+```
+```{r ordenar-nivest}
+df_final <- df_final %>%
+  mutate(
+    NIVEST = factor(
+      as.character(NIVEST),
+      levels = c(
+        "No sabe leer o escribir",
+        "Educación Primaria completa",
+        "Primera etapa de Enseñanza Secundaria, con o sin título (2º ESO aprobado, EGB, Bachillerato Elemental)",
+        "Estudios de Bachillerato",
+        "Enseñanzas profesionales de grado medio o equivalentes",
+        "Enseñanzas profesionales de grado superior o equivalentes",
+        "Estudios universitarios o equivalentes"
+      ),
+      ordered = TRUE
+    )
+  )
+
+table(df_final$NIVEST, useNA = "ifany")
+```
+```{r check-nrow-1}
+nrow(df_final)
+```
+## Análisis univariante sociodemográfico
+
+Descripción de las variables de edad, sexo, estado civil, nivel de estudios, país de  nacimiento y años residiendo en España de la muestra.
+
+```{r tabla-univariante-socio}
+library(dplyr)
+
+# Función para generar tabla de frecuencias y porcentajes
+tabla_freq <- function(var, nombre) {
+  df_final %>%
+    count(!!sym(var)) %>%
+    mutate(
+      variable = nombre,
+      porcentaje = round(100 * n / sum(n), 1)
+    ) %>%
+    rename(categoria = !!sym(var)) %>%
+    select(variable, categoria, n, porcentaje)
+}
+
+tabla_edad <- tabla_freq("grupo_edad", "Grupo de edad")
+tabla_sexo <- tabla_freq("SEXOa", "Sexo")
+tabla_nacionalidad <- tabla_freq("nacionalidad", "Nacionalidad")
+tabla_civil <- tabla_freq("A5", "Estado civil")
+tabla_estudios <- tabla_freq("NIVEST", "Nivel de estudios")
+
+tabla_sociodemografica <- bind_rows(
+  tabla_edad, tabla_sexo, tabla_nacionalidad, tabla_civil, tabla_estudios
+)
+
+tabla_sociodemografica
+```
+```{r completar-tabla-socio}
+# País de nacimiento - se añade a la tabla de frecuencias
+tabla_pais <- tabla_freq("A1a", "País de nacimiento")
+
+tabla_sociodemografica <- bind_rows(
+  tabla_sociodemografica, tabla_pais
+)
+
+tabla_sociodemografica
+
+# Años residiendo en España - resumen numérico (solo aplica a quien no nació en España)
+summary(df_final$A3)
+```
+```{r ver-paises}
+# Ver todas las categorías de país de nacimiento con su frecuencia
+tabla_sociodemografica %>% 
+  filter(variable == "País de nacimiento") %>% 
+  arrange(desc(n))
+```
+
+```{r grafico-edad}
+graficar_barras("grupo_edad", "Distribución por grupo de edad")
+```
+
+La muestra se concentra en el grupo de 45-64 años (35.3%), seguido de 25-44 años (24.8%). El grupo menos representado es el de 15-24 años (7.2%).
+
+```{r funcion-grafico-sectores}
+graficar_sectores <- function(var, titulo, colores = c("#2C5F7C", "#8FAFC2")) {
+  df_final %>%
+    count(!!sym(var)) %>%
+    filter(!is.na(!!sym(var))) %>%
+    mutate(porcentaje = 100 * n / sum(n),
+           etiqueta = paste0(!!sym(var), "\n", round(porcentaje, 1), "%")) %>%
+    ggplot(aes(x = "", y = porcentaje, fill = !!sym(var))) +
+    geom_col(width = 1, color = "white") +
+    coord_polar(theta = "y") +
+    geom_text(aes(label = etiqueta), position = position_stack(vjust = 0.5), 
+              color = "white", size = 4, fontface = "bold") +
+    scale_fill_manual(values = colores) +
+    labs(title = titulo) +
+    theme_void() +
+    theme(legend.position = "none",
+          plot.title = element_text(face = "bold", size = 13, hjust = 0.5))
+}
+```
+```{r grafico-sexo}
+graficar_sectores("SEXOa", "Distribución por sexo")
+```
+
+Existe una ligera mayoría de mujeres en la muestra (54%) frente a hombres (46%).
+
+```{r grafico-civil}
+df_final %>%
+  filter(!is.na(A5), A5 != "No contesta") %>%
+  count(A5) %>%
+  mutate(porcentaje = 100 * n / sum(n)) %>%
+  ggplot(aes(x = A5, y = porcentaje)) +
+  geom_col(fill = "#2C5F7C") +
+  geom_text(aes(label = paste0(round(porcentaje, 1), "%")), vjust = -0.5, size = 3.5) +
+  labs(title = "Distribución por estado civil", x = NULL, y = "Porcentaje (%)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15)))
+```
+
+Predominan las personas casadas (47.2%), seguidas de solteras (30.1%). Las categorías de separación, divorcio y "no contesta" son minoritarias.
+
+```{r recode-nivest}
+library(haven)
+
+df_final <- df_final %>%
+  mutate(NIVEST = as_factor(NIVEST)) %>%
+  mutate(NIVEST = as.character(NIVEST)) %>%
+  mutate(NIVEST = ifelse(NIVEST == "Primera etapa de Enseñanza Secundaria, con o sin título (2º ESO aprobado, EGB, Bachillerato Elemental)",
+                          "Primera etapa de Enseñanza Secundaria",
+                          NIVEST))
+```
+
+```{r reordenar-nivest}
+df_final <- df_final %>%
+  mutate(NIVEST = factor(NIVEST,
+    levels = c(
+      "No sabe leer o escribir",
+      "Educación Primaria completa",
+      "Primera etapa de Enseñanza Secundaria",
+      "Estudios de Bachillerato",
+      "Enseñanzas profesionales de grado medio o equivalentes",
+      "Enseñanzas profesionales de grado superior o equivalentes",
+      "Estudios universitarios o equivalentes"
+    )))
+
+levels(df_final$NIVEST)
+sum(is.na(df_final$NIVEST))
+```
+```{r grafico-estudios, fig.width=9, fig.height=6, out.width="100%"}
+graficar_barras("NIVEST", "Distribución por nivel de estudios", horizontal = TRUE)
+```
+
+
+La distribución muestra una proporción importante de personas con estudios universitarios, mientras que el porcentaje de personas que no saben leer o escribir es mínimo (0.9%), reflejando el nivel educativo generalmente alto de la muestra.
+
+
+```{r grafico-pais}
+graficar_sectores("A1a", "Distribución por país de nacimiento")
+```
+
+El 87.5% de la muestra nació en España, frente a un 12.5% nacida en el extranjero — una proporción algo distinta a la de nacionalidad, ya que ambos conceptos no siempre coinciden.
+
+```{r grafico-anos-residencia}
+df_final <- df_final %>%
+  mutate(A3_limpio = ifelse(A3 == 99, NA, A3),
+         anos_residencia_grupo = case_when(
+           A3_limpio <= 5  ~ "0-5",
+           A3_limpio <= 10 ~ "6-10",
+           A3_limpio <= 20 ~ "11-20",
+           A3_limpio <= 30 ~ "21-30",
+           A3_limpio > 30  ~ "Más de 30",
+           TRUE ~ NA_character_
+         ),
+         anos_residencia_grupo = factor(anos_residencia_grupo,
+           levels = c("0-5", "6-10", "11-20", "21-30", "Más de 30")))
+
+graficar_barras("anos_residencia_grupo", "Distribución por años residiendo en España")
+```
+
+El tramo más frecuente es el de 11-20 años residiendo en España (32.3%), seguido de 0-5 años (21.4%) y 6-10 años (20.3%). El grupo menos representado es el de más de 30 años de residencia (6%). En términos generales, la media de años de residencia es de 14.9 años, con una mediana de 15 años, lo que indica una distribución razonablemente equilibrada..
+
+```{r check-nrow-2}
+nrow(df_final)
+```
+
+## Análisis univariante laboral
+```{r crear-situacion-laboral}
+df_final <- df_final %>%
+  mutate(situacion_laboral = case_when(
+    !is.na(B14a_2)              ~ "Ocupado",
+    grepl("^Sí", B1)            ~ "Pensionista",
+    !is.na(B6)                  ~ "Parado",
+    TRUE                        ~ "Inactivo/otra situación"
+  ),
+  situacion_laboral = factor(situacion_laboral,
+    levels = c("Ocupado", "Parado", "Pensionista", "Inactivo/otra situación")))
+```
+
+```{r recode-b8}
+library(haven)
+
+df_final <- df_final %>%
+  mutate(B8 = as_factor(B8)) %>%
+  mutate(B8 = as.character(B8)) %>%
+  mutate(B8 = ifelse(B8 == "Ayuda familiar (sin remuneración reglamentada en la empresa o negocio de un familiar)",
+                      "Ayuda familiar sin remuneración",
+                      B8))
+```
+
+```{r grafico-situacion-laboral}
+graficar_barras("situacion_laboral", "Distribución por situación laboral", color = "#3D8B8B")
+```
+
+La mayoría de la muestra se encuentra ocupada (47%), seguida de un grupo importante de pensionistas (31.3%). Los parados representan un 8.6%, mientras que un 13.1% se encuentra en otra situación de inactividad.
+Entre quienes trabajan, predomina el contrato de duración indefinida (59.9%), seguido de quienes son funcionarios/as (12.4%) y de los contratos temporales (9.4%). El resto de categorías (empresarios, ayuda familiar, sin contrato) representan porcentajes minoritarios.La gran mayoría de la muestra ocupada trabaja a tiempo completo (89.1%), frente a un 10% que trabaja a tiempo parcial.
+
+```{r grafico-tipo-jornada, fig.width=10, fig.height=6, out.width="100%"}
+graficar_barras("B12", "Distribución por tipo de jornada", 
+                 horizontal = TRUE, color = "#3D8B8B", excluir = "No contesta")
+```
+
+En cuanto al tipo de jornada, predomina la jornada partida (35.2%), seguida de la jornada continua por la mañana (30.5%). Los turnos representan un 14.9% de la muestra, y la jornada irregular o variable según los días un 13.1%. El resto de modalidades (jornada continua por la tarde, jornada reducida, jornada continua por la noche y "otro tipo") son minoritarias, cada una por debajo del 3%.
+
+```{r recode-sector-actividad}
+sectores_primario <- c(
+  "Actividades de apoyo a la agricultura, a la ganadería y de preparación posterior a la cosecha",
+  "Acuicultura", "Cultivos no perennes", "Cultivos perennes", "Explotación de la madera",
+  "Pesca", "Producción agrícola combinada con la producción ganadera", "Producción ganadera",
+  "Propagación de plantas", "Recolección de productos silvestres, excepto madera",
+  "Servicios de apoyo a la silvicultura", "Silvicultura y otras actividades forestales"
+)
+
+sectores_construccion <- c(
+  "Acabado de edificios", "Construcción de carreteras y vías férreas, puentes y túneles",
+  "Construcción de edificios", "Construcción de otros proyectos de ingeniería civil",
+  "Construcción de redes", "Demolición y preparación de terrenos",
+  "Instalaciones eléctricas, de fontanería y otras instalaciones en obras de construcción",
+  "Otras actividades de construcción especializada", "Promoción inmobiliaria"
+)
+
+sectores_industria <- c(
+  "Acabado de textiles", "Actividades de descontaminación y otros servicios de gestión de residuos",
+  "Artes gráficas y servicios relacionados con las mismas", "Aserrado y cepillado de la madera",
+  "Captación, depuración y distribución de agua", "Confección de prendas de vestir de punto",
+  "Confección de prendas de vestir, excepto de peletería", "Construcción aeronáutica y espacial y su maquinaria",
+  "Construcción naval", "Coquerías", "Corte, tallado y acabado de la piedra",
+  "Extracción de minerales de hierro", "Extracción de minerales metálicos no férreos",
+  "Extracción de piedra, arena y arcilla", "Fabricación de aceites y grasas vegetales y animales",
+  "Fabricación de aparatos domésticos", "Fabricación de armas y municiones",
+  "Fabricación de artículos de cuchillería y cubertería, herramientas y ferretería",
+  "Fabricación de artículos de deporte", "Fabricación de artículos de joyería, bisutería y similares",
+  "Fabricación de artículos de papel y de cartón", "Fabricación de bebidas",
+  "Fabricación de cables y dispositivos de cableado", "Fabricación de calzado",
+  "Fabricación de carrocerías para vehículos de motor; fabricación de remolques y semirremolques",
+  "Fabricación de cemento, cal y yeso", "Fabricación de cisternas, grandes depósitos y contenedores de metal",
+  "Fabricación de componentes electrónicos y circuitos impresos ensamblados",
+  "Fabricación de componentes, piezas y accesorios para vehículos de motor",
+  "Fabricación de elementos de hormigón, cemento y yeso",
+  "Fabricación de elementos metálicos para la construcción",
+  "Fabricación de equipos de radiación, electromédicos y electroterapéuticos",
+  "Fabricación de equipos de telecomunicaciones", "Fabricación de especialidades farmacéuticas",
+  "Fabricación de instrumentos de óptica y equipo fotográfico",
+  "Fabricación de instrumentos y aparatos de medida, verificación y navegación; fabricación de relojes",
+  "Fabricación de instrumentos y suministros médicos y odontológicos",
+  "Fabricación de jabones, detergentes y otros artículos de limpieza y abrillantamiento; fabricación de perfumes y cosméticos",
+  "Fabricación de juegos y juguetes", "Fabricación de locomotoras y material ferroviario",
+  "Fabricación de maquinaria agraria y forestal", "Fabricación de maquinaria de uso general",
+  "Fabricación de máquinas herramienta para trabajar el metal y otras máquinas herramienta",
+  "Fabricación de motores, generadores y transformadores eléctricos, y de aparatos de distribución y control eléctrico",
+  "Fabricación de muebles", "Fabricación de ordenadores y equipos periféricos",
+  "Fabricación de otra maquinaria de uso general", "Fabricación de otra maquinaria para usos específicos",
+  "Fabricación de otro material de transporte n.c.o.p.", "Fabricación de otro material y equipo eléctrico",
+  "Fabricación de otros productos alimenticios", "Fabricación de otros productos cerámicos",
+  "Fabricación de otros productos de primera transformación del acero",
+  "Fabricación de otros productos metálicos", "Fabricación de otros productos químicos",
+  "Fabricación de otros productos textiles", "Fabricación de pasta papelera, papel y cartón",
+  "Fabricación de pesticidas y otros productos agroquímicos",
+  "Fabricación de pinturas, barnices y revestimientos similares; tintas de imprenta y masillas",
+  "Fabricación de productos abrasivos y productos minerales no metálicos n.c.o.p.",
+  "Fabricación de productos básicos de hierro, acero y ferroaleaciones",
+  "Fabricación de productos cerámicos para la construcción", "Fabricación de productos cerámicos refractarios",
+  "Fabricación de productos de caucho", "Fabricación de productos de madera, corcho, cestería y espartería",
+  "Fabricación de productos de molinería, almidones y productos amiláceos",
+  "Fabricación de productos de panadería y pastas alimenticias", "Fabricación de productos de plástico",
+  "Fabricación de productos farmacéuticos de base", "Fabricación de productos lácteos",
+  "Fabricación de productos para la alimentación animal",
+  "Fabricación de productos químicos básicos, compuestos nitrogenados, fertilizantes, plásticos y caucho sintético en formas primarias",
+  "Fabricación de tejidos textiles", "Fabricación de tubos, tuberías, perfiles huecos y sus accesorios, de acero",
+  "Fabricación de vehículos de motor", "Fabricación de vidrio y productos de vidrio",
+  "Forja, estampación y embutición de metales; metalurgia de polvos", "Fundición de metales",
+  "Industria del tabaco", "Industrias extractivas n.c.o.p.", "Industrias manufactureras n.c.o.p.",
+  "Instalación de máquinas y equipos industriales", "Preparación e hilado de fibras textiles",
+  "Preparación, curtido y acabado del cuero; fabricación de artículos de marroquinería, viaje y de guarnicionería y talabartería; preparación y teñido de pieles",
+  "Procesado y conservación de carne y elaboración de productos cárnicos",
+  "Procesado y conservación de frutas y hortalizas", "Procesado y conservación de pescados, crustáceos y moluscos",
+  "Producción de gas; distribución por tubería de combustibles gaseosos",
+  "Producción de metales preciosos y de otros metales no férreos",
+  "Producción, transporte y distribución de energía eléctrica", "Recogida de residuos",
+  "Recogida y tratamiento de aguas residuales", "Refino de petróleo",
+  "Reparación de productos metálicos, maquinaria y equipo", "Suministro de vapor y aire acondicionado",
+  "Tratamiento y eliminación de residuos",
+  "Tratamiento y revestimiento de metales; ingeniería mecánica por cuenta de terceros", "Valorización"
+)
+
+df_final <- df_final %>%
+  mutate(B13a_2 = as.character(B13a_2)) %>%
+  mutate(sector_actividad = case_when(
+    B13a_2 == "No contesta" ~ NA_character_,
+    B13a_2 %in% sectores_primario ~ "Primario",
+    B13a_2 %in% sectores_construccion ~ "Construcción",
+    B13a_2 %in% sectores_industria ~ "Industria",
+    !is.na(B13a_2) ~ "Servicios"
+  ),
+  sector_actividad = factor(sector_actividad,
+    levels = c("Primario", "Industria", "Construcción", "Servicios")))
+```
+```{r grafico-sector-actividad, fig.width=9, fig.height=5}
+graficar_barras("sector_actividad", "Distribución por sector de actividad", color = "#3D8B8B")
+```
+
+El sector servicios concentra a la gran mayoría de la población ocupada (75.2%), muy por delante del resto de sectores. La industria representa un 13.3%, la construcción un 6.4% y el sector primario apenas un 5.1%. Esta distribución es coherente con la estructura económica española actual, fuertemente terciarizada.
+
+```{r check-nrow-3}
+nrow(df_final)
+```
+## Análisis univariante de salud
+
+```{r grafico-percepcion-salud}
+graficar_barras("C1", "Percepción del estado de salud", color = "#B5654A")
+```
+
+La mayoría de la muestra percibe su estado de salud como bueno (54.5%) o muy bueno (25%), sumando prácticamente un 80% con valoraciones positivas. Solo un 3.9% lo califica como malo o muy malo (3.1% y 0.8% respectivamente), mientras que un 16.6% lo considera regular.
+
+
+```{r grafico-tipo-problema}
+graficar_barras("C3b", "Tipo de problema que causa la limitación", color = "#B5654A")
+```
+
+Entre quienes presentan alguna limitación, el problema es predominantemente de tipo físico (78.7%), seguido de quienes tienen problemas de ambos tipos —físico y mental— (12.7%). Los problemas exclusivamente mentales son minoritarios (8%).
+
+```{r recode-dificultad-funcional}
+vars_dificultad <- c("F2", "F4", "F5", "F6", "F7", "F8", "F9")
+
+df_final <- df_final %>%
+  mutate(across(all_of(vars_dificultad), as.character)) %>%
+  mutate(dificultad_funcional = if_else(
+    if_any(all_of(vars_dificultad), ~ !is.na(.x) & .x != "No, ninguna dificultad"),
+    "Con dificultad",
+    "Sin dificultad"
+  ))
+```
+```{r grafico-dificultad-funcional}
+graficar_sectores("dificultad_funcional", "Personas con alguna dificultad funcional relevante",
+                   colores = c("#B5654A", "#D9A491"))
+```
+
+Un 28.7% de la muestra presenta alguna dificultad funcional relevante (visual, auditiva, de movilidad, concentración o masticación), frente a un 71.3% que no reporta ninguna.
+
+```{r check-nrow-4}
+nrow(df_final)
+```
+## Análisis univariante de estado físico
+
+```{r recode-abvd}
+vars_abvd <- c("G1_1", "G1_2", "G1_3", "G1_4", "G1_5")
+
+df_final <- df_final %>%
+  mutate(across(all_of(vars_abvd), as.character)) %>%
+  mutate(dificultad_abvd = if_else(
+    if_any(all_of(vars_abvd), ~ !is.na(.x) & .x != "TEXTO_EXACTO_SIN_DIFICULTAD"),
+    "Con dificultad",
+    "Sin dificultad"
+  ))
+```
+```{r grafico-abvd}
+graficar_sectores("dificultad_abvd", "Dificultad en actividades básicas de la vida diaria",
+                   colores = c("#7A6C8F", "#C4BBD1"))
+```
+
+Un 23.9% de la muestra presenta alguna dificultad para realizar actividades básicas de la vida diaria (alimentarse, vestirse, ducharse, etc. sin ayuda), frente a un 76.1% que no reporta ninguna dificultad de este tipo.
+
+```{r recode-aivd}
+vars_aivd <- c("G4_1", "G4_2", "G4_3", "G4_4", "G4_5", "G4_6", "G4_7")
+
+df_final <- df_final %>%
+  mutate(across(all_of(vars_aivd), as.character)) %>%
+  mutate(dificultad_aivd = if_else(
+    if_any(all_of(vars_aivd), ~ !is.na(.x) & .x != "No, ninguna dificultad"),
+    "Con dificultad",
+    "Sin dificultad"
+  ))
+```
+```{r grafico-aivd}
+graficar_sectores("dificultad_aivd", "Dificultad en actividades instrumentales de la vida diaria",
+                   colores = c("#7A6C8F", "#C4BBD1"))
+```
+
+Solo un 3.8% de la muestra presenta dificultad para realizar actividades instrumentales de la vida diaria (preparar comidas, usar el teléfono, hacer compras, administrar el dinero, etc.), frente a un 96.2% que no reporta ninguna dificultad.
+
+```{r grafico-grado-dolor, horizontal = TRUE, fig.width=9, fig.height=5}
+graficar_barras("G7", "Grado de dolor padecido en las últimas 4 semanas",
+                 horizontal = TRUE, color = "#7A6C8F", excluir = "No contesta")
+```
+
+Algo más de la mitad de la muestra no padece ningún dolor (54.5%). Entre quienes sí lo experimentan, predomina el dolor leve (15.9%) y muy leve (13.5%), mientras que los grados moderado (11.6%), severo (3.9%) y extremo (0.5%) son menos frecuentes.
+
+```{r grafico-impacto-dolor, horizontal = TRUE, fig.width=9, fig.height=5}
+graficar_barras("G8", "Impacto del dolor en las actividades cotidianas",
+                 horizontal = TRUE, color = "#7A6C8F", excluir = "No contesta")
+```
+
+Entre quienes padecen dolor, su impacto en las actividades cotidianas es mayoritariamente leve: un 39.6% dice que le afecta "un poco" y un 33.1% señala que "nada". El impacto moderado se da en un 16.9% de los casos, mientras que "bastante" (7.3%) y "mucho" (3%) son los menos frecuentes.
+
+```{r recode-peso}
+df_final <- df_final %>%
+  mutate(peso_grupo = case_when(
+    N2 < 60             ~ "Menos de 60",
+    N2 >= 60 & N2 < 70  ~ "60-69",
+    N2 >= 70 & N2 < 80  ~ "70-79",
+    N2 >= 80 & N2 < 90  ~ "80-89",
+    N2 >= 90            ~ "90 o más",
+    TRUE ~ NA_character_
+  ),
+  peso_grupo = factor(peso_grupo,
+    levels = c("Menos de 60", "60-69", "70-79", "80-89", "90 o más")))
+```
+```{r grafico-peso, fig.width=9, fig.height=5}
+graficar_barras("peso_grupo", "Distribución del peso corporal", color = "#7A6C8F")
+```
+
+El peso medio de la muestra es de 74.3 kg, con una mediana de 73 kg, lo que indica una distribución bastante simétrica. Los valores oscilan entre un mínimo de 35 kg y un máximo de 180 kg.
+
+```{r check-nrow-5}
+nrow(df_final)
+```
+## Análisis univariante de tabaquismo
+
+```{r q1-fumar}
+df_final <- df_final %>%
+  mutate(
+    Q1_fumar = case_when(
+      Q1 == "No contesta" ~ NA_character_,
+      TRUE ~ as.character(Q1)
+    ),
+    Q1_fumar = factor(Q1_fumar,
+      levels = c("No fumo ni he fumado nunca de manera habitual",
+                 "No fumo actualmente, pero he fumado antes",
+                 "Sí fumo, pero no a diario",
+                 "Sí, fumo a diario"))
+  )
+```
+
+```{r grafico-tabaco, fig.width=8, fig.height=5}
+graficar_barras("Q1_fumar", "Situación respecto al tabaco",
+                 horizontal = TRUE, color = "#B85450")
+```
+
+Algo más de la mitad de la muestra (53.2%) no ha fumado nunca de manera habitual. Entre quienes sí tienen relación con el tabaco, un 22.1% fuma a diario, un 21.5% lo dejó, y solo un 3.2% fuma mas no a diario.
+
+```{r histograma-cigarrillos, fig.width=7, fig.height=5}
+df_final %>%
+  filter(Q2 < 100) %>%
+  drop_na(Q2) %>%
+  ggplot(aes(x = Q2)) +
+  geom_histogram(binwidth = 2, fill = "#B85450", color = "white") +
+  labs(title = "Número de cigarrillos fumados al día",
+       x = "Cigarrillos al día",
+       y = "Número de personas") +
+  theme_minimal() +
+  scale_x_continuous(breaks = seq(0, 60, by = 10)) +
+  geom_vline(aes(xintercept = median(Q2, na.rm = TRUE)),
+             color = "#2C5F7C", linetype = "dashed", linewidth = 1)
+```
+
+Entre quienes fuman a diario se observan picos marcados en 10, 20 y 40 cigarrillos, un patrón habitual en datos autodeclarados: las personas tienden a redondear su consumo a cifras "cerradas" al responder, en vez de dar el número exacto.
+
+```{r histograma-edad-inicio, fig.width=7, fig.height=5}
+df_final %>%
+  drop_na(Q3) %>%
+  ggplot(aes(x = Q3)) +
+  geom_histogram(binwidth = 5, fill = "#B85450", color = "white", boundary = 0) +
+  labs(title = "Edad de inicio en el consumo de tabaco",
+       x = "Edad (años)",
+       y = "Número de personas") +
+  theme_minimal() +
+  scale_x_continuous(breaks = seq(0, 80, by = 5)) +
+  geom_vline(aes(xintercept = median(Q3, na.rm = TRUE)),
+             color = "#2C5F7C", linetype = "dashed", linewidth = 1)
+```
+
+La mayoría de los fumadores comenzó a fumar entre los 15 y 20 años, con la mediana situada en esa franja. Muy pocas personas se iniciaron después de los 30, lo que confirma que el hábito se establece mayoritariamente en la adolescencia o inicio de la vida adulta.
+
+```{r grafico-q7, fig.width=8, fig.height=5}
+graficar_barras("Q7", "Uso de cigarrillos o aparatos electrónicos",
+                 horizontal = TRUE, color = "#B85450", excluir = "No contesta")
+```
+
+El uso de cigarrillos electrónicos es marginal en la muestra: un 93.5% declara no haberlos usado nunca, frente a apenas un 6.5% repartido entre quienes los usan actualmente o los han probado en el pasado.
+
+```{r check-nrow-6}
+nrow(df_final)
+```
+## Análisis bivariante
+
+```{r fumar-sexo-test}
+tabla <- table(df_final$SEXOa, df_final$Q1_fumar)
+chisq.test(tabla)
+```
+```{r fumar-sexo-tabla}
+tabla_pct <- df_final %>%
+  filter(!is.na(SEXOa), !is.na(Q1_fumar)) %>%
+  count(SEXOa, Q1_fumar) %>%
+  group_by(SEXOa) %>%
+  mutate(porcentaje = 100 * n / sum(n))
+
+tabla_pct
+```
+```{r fumar-sexo-grafico, fig.width=8, fig.height=5}
+tabla_pct %>%
+  ggplot(aes(x = SEXOa, y = porcentaje, fill = Q1_fumar)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = paste0(round(porcentaje, 1), "%")),
+            position = position_dodge(width = 0.9), vjust = -0.3, size = 3.5) +
+  labs(title = "Situación respecto al tabaco según sexo",
+       x = NULL, y = "Porcentaje (%)", fill = "Situación") +
+  theme_minimal() +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15)))
+```
+
+El test de chi-cuadrado confirma una relación estadísticamente significativa entre sexo y el hábito de fumar (p < 0.001). Al desglosar por sexo se observa que los hombres fuman a diario en mayor proporción que las mujeres (21% frente a 13.6%). Además, las mujeres presentan un porcentaje mayor de personas que nunca han fumado de forma habitual (65.9% frente a 47% en hombres). El porcentaje de exfumadores es algo mayor en hombres que en mujeres (29.2% frente a 18.5%).
+
+```{r fumar-edad-test}
+tabla_edad <- table(df_final$grupo_edad, df_final$Q1_fumar)
+chisq.test(tabla_edad)
+```
+
+```{r fumar-edad-tabla}
+tabla_edad_pct <- df_final %>%
+  filter(!is.na(grupo_edad), !is.na(Q1_fumar)) %>%
+  count(grupo_edad, Q1_fumar) %>%
+  group_by(grupo_edad) %>%
+  mutate(porcentaje = 100 * n / sum(n))
+
+tabla_edad_pct
+```
+```{r fumar-edad-grafico, fig.width=9, fig.height=5}
+tabla_edad_pct %>%
+  ggplot(aes(x = grupo_edad, y = porcentaje, fill = Q1_fumar)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = paste0(round(porcentaje, 1), "%")),
+            position = position_dodge(width = 0.9), vjust = -0.3, size = 3) +
+  labs(title = "Situación respecto al tabaco según grupo de edad",
+       x = NULL, y = "Porcentaje (%)", fill = "Situación") +
+  theme_minimal() +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15)))
+```
+
+El test de chi-cuadrado confirma una relación estadísticamente muy significativa entre grupo de edad y hábito de fumar (X² = 1911.4, df = 12, p < 0.001). Se observa un patrón claramente generacional: el grupo más joven (15-24 años) es el que menos ha fumado nunca (80.1%), y el consumo diario aumenta en los grupos de 25-44 y 45-64 años (22.6% y 22.9% respectivamente), donde se concentra el mayor porcentaje de fumadores activos. A partir de los 65 años el fumar a diario cae drásticamente (12.5% en 65-74, solo 3.4% en 75+), mientras que el porcentaje de exfumadores aumenta progresivamente con la edad (4.5% en 15-24 hasta 35.4% en 65-74), reflejando el abandono del hábito a lo largo de la vida. Llama la atención que el grupo de 75+ vuelva a mostrar un alto porcentaje de "nunca ha fumado" (73.2%), similar al de los más jóvenes, lo que puede deberse tanto a patrones de consumo distintos en generaciones más mayores como a un efecto de supervivencia (los grandes fumadores tienden a fallecer antes, dejando una muestra de mayores con menor exposición histórica al tabaco).
+
+```{r fumar-estudios-test}
+tabla_estudios <- table(df_final$NIVEST, df_final$Q1_fumar)
+chisq.test(tabla_estudios)
+```
+```{r fumar-estudios-tabla}
+tabla_estudios_pct <- df_final %>%
+  filter(!is.na(NIVEST), NIVEST != "No sabe leer o escribir",
+         !is.na(Q1_fumar)) %>%
+  count(NIVEST, Q1_fumar) %>%
+  group_by(NIVEST) %>%
+  mutate(porcentaje = 100 * n / sum(n))
+
+tabla_estudios_pct
+```
+```{r fumar-estudios-test2}
+df_test <- df_final %>% 
+  filter(!is.na(NIVEST), NIVEST != "No sabe leer o escribir", !is.na(Q1_fumar)) %>%
+  droplevels()
+
+tabla_estudios2 <- table(df_test$NIVEST, df_test$Q1_fumar)
+tabla_estudios2
+chisq.test(tabla_estudios2)
+```
+```{r fumar-estudios-test2-esperadas}
+chisq.test(tabla_estudios2)$expected
+```
+```{r fumar-estudios-grafico, fig.width=10, fig.height=7}
+tabla_estudios_pct %>%
+  ggplot(aes(x = NIVEST, y = porcentaje, fill = Q1_fumar)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = paste0(round(porcentaje, 1), "%")),
+            position = position_dodge(width = 0.9), hjust = -0.1, size = 2.8) +
+  labs(title = "Situación respecto al tabaco según nivel de estudios",
+       x = NULL, y = "Porcentaje (%)", fill = "Situación") +
+  theme_minimal() +
+  coord_flip() +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15)))
+```
+
+La relación entre nivel de estudios y consumo de tabaco no sigue un patrón 
+estrictamente lineal. El porcentaje de fumadores diarios es más alto en los niveles 
+intermedios de estudios: "Primera etapa de Enseñanza Secundaria" (26.2%) y 
+"Enseñanzas profesionales de grado medio" (23.9%) presentan las tasas de tabaquismo 
+diario más elevadas. En cambio, tanto en el extremo superior (Estudios universitarios, 
+12.3%) como en el inferior (Educación Primaria completa, 11.5%) el porcentaje de 
+fumadores diarios es menor.
+
+Cabe destacar que en el grupo de Educación Primaria completa la categoría "No fumo ni he fumado nunca" es la más alta de todos los niveles (64.5%), lo cual podría estar 
+influido por la estructura de edad de este grupo (personas de mayor edad,entre las que el hábito tabáquico histórico es distinto), más que por el nivel educativo en sí. Por ello, esta relación debe interpretarse con cautela, ya que puede estar afectada por variables de confusión como la edad.
+
+
+```{r crear-anos-residencia-grupo}
+df_final <- df_final %>%
+  mutate(A3_num = as.numeric(as.character(A3)),
+         A3_limpio = ifelse(A3_num == 99, NA, A3_num),
+         anos_residencia_grupo = case_when(
+           A3_limpio <= 5  ~ "0-5",
+           A3_limpio <= 10 ~ "6-10",
+           A3_limpio <= 20 ~ "11-20",
+           A3_limpio <= 30 ~ "21-30",
+           A3_limpio > 30  ~ "Más de 30",
+           TRUE ~ NA_character_
+         ),
+         anos_residencia_grupo = factor(anos_residencia_grupo,
+           levels = c("0-5", "6-10", "11-20", "21-30", "Más de 30")))
+
+prop.table(table(df_final$anos_residencia_grupo, useNA = "no")) * 100
+```
+```{r fumar-residencia-test}
+tabla_residencia <- table(df_final$anos_residencia_grupo, df_final$Q1_fumar)
+chisq.test(tabla_residencia)
+```
+```{r fumar-residencia-tabla}
+tabla_residencia_pct <- df_final %>%
+  filter(!is.na(anos_residencia_grupo), !is.na(Q1_fumar)) %>%
+  count(anos_residencia_grupo, Q1_fumar) %>%
+  group_by(anos_residencia_grupo) %>%
+  mutate(porcentaje = 100 * n / sum(n))
+
+tabla_residencia_pct
+```
+```{r fumar-residencia-grafico, fig.width=9, fig.height=5}
+tabla_residencia_pct %>%
+  ggplot(aes(x = anos_residencia_grupo, y = porcentaje, fill = Q1_fumar)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = paste0(round(porcentaje, 1), "%")),
+            position = position_dodge(width = 0.9), vjust = -0.3, size = 3) +
+  labs(title = "Situación respecto al tabaco según años de residencia en España",
+       x = NULL, y = "Porcentaje (%)", fill = "Situación") +
+  theme_minimal() +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15)))
+```
+El test de chi-cuadrado confirma una relación estadísticamente significativa entre años de residencia en España y el hábito de fumar (X² = 104.08, df = 12, p < 0.001). Se observa un patrón claro: a medida que aumentan los años de residencia, disminuye el porcentaje de quienes nunca han fumado (del 79.3% con 0-5 años, hasta el 51% con más de 30 años) y aumenta tanto el porcentaje de exfumadores (del 9.5% al 26.3%) como el de fumadores diarios (del 8.5% al 18.6%). Este patrón sugiere un efecto de aculturación: cuanto más tiempo lleva una persona residiendo en España, más se aproxima su comportamiento respecto al tabaco al de la población general del país, posiblemente adoptando hábitos de consumo más similares a los locales con el paso del tiempo.
+
+```{r}
+tabla_c1_fumar <- table(df_final$C1, df_final$Q1_fumar)
+chisq.test(tabla_c1_fumar)
+
+tabla_c1_fumar_pct <- df_final %>%
+  filter(!is.na(C1), !is.na(Q1_fumar)) %>%
+  count(C1, Q1_fumar) %>%
+  group_by(C1) %>%
+  mutate(porcentaje = 100 * n / sum(n))
+
+tabla_c1_fumar_pct
+
+tabla_c1_fumar_pct %>%
+  ggplot(aes(x = C1, y = porcentaje, fill = Q1_fumar)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = paste0(round(porcentaje, 1), "%")),
+            position = position_dodge(width = 0.9), vjust = -0.3, size = 3) +
+  labs(title = "Situación respecto al tabaco según percepción de salud",
+       x = NULL, y = "Porcentaje (%)", fill = "Situación") +
+  theme_minimal() +
+  coord_flip() +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15)))
+```
+
+Se observa una tendencia clara: a medida que empeora la percepción del estado de salud, aumenta el porcentaje de personas que fuman a diario. Entre quienes perciben su salud como "muy buena", solo un 16.4% fuma a diario, frente a un 19.1% entre quienes la perciben como "muy mala" — el porcentaje más alto de todas las categorías.
+
+De forma coherente, el grupo "muy bueno" también presenta el mayor porcentaje de personas que nunca han fumado (65%), mientras que en el grupo "muy malo" esa proporción baja al 50.8%, el valor más bajo de la escala. Asimismo, el grupo "muy malo" tiene la tasa más alta de exfumadores (29%), lo que podría reflejar tanto el 
+abandono del hábito tras problemas de salud como el efecto acumulado del tabaquismo en la percepción de bienestar.
+
+Es importante señalar que esta relación es descriptiva y no permite establecer causalidad: no se puede determinar si fumar empeora la percepción de salud, si una salud percibida como peor lleva a fumar más, o si ambas están influidas por otros 
+factores (edad, nivel socioeconómico, enfermedades crónicas, etc.).
+
+```{r}
+tabla_c2_fumar <- table(df_final$C2, df_final$Q1_fumar)
+chisq.test(tabla_c2_fumar)
+
+tabla_c2_fumar_pct <- df_final %>%
+ filter(!is.na(C2), C2 != "No contesta", !is.na(Q1_fumar)) %>%
+  count(C2, Q1_fumar) %>%
+  group_by(C2) %>%
+  mutate(porcentaje = 100 * n / sum(n))
+
+tabla_c2_fumar_pct
+
+tabla_c2_fumar_pct %>%
+  ggplot(aes(x = C2, y = porcentaje, fill = Q1_fumar)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = paste0(round(porcentaje, 1), "%")),
+            position = position_dodge(width = 0.9), vjust = -0.3, size = 3) +
+  labs(title = "Situación respecto al tabaco según presencia de enfermedad crónica",
+       x = NULL, y = "Porcentaje (%)", fill = "Situación") +
+  theme_minimal() +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15)))
+```
+
+El test de chi-cuadrado confirma una relación estadísticamente significativa entre la presencia de enfermedad o problema de salud crónico y el hábito de fumar (p < 0.001). Las personas sin enfermedad crónica presentan una proporción algo mayor de quienes nunca han fumado (62.1% frente a 54.5%), mientras que entre quienes sí tienen una enfermedad crónica destaca un porcentaje notablemente más alto de exfumadores (27.3% frente a 16.3%). El porcentaje de fumadores diarios es similar en ambos grupos (18.6% sin enfermedad crónica frente a 16.2% con ella). Este patrón sugiere de nuevo un posible efecto de causalidad inversa: es probable que buena parte de las personas con una enfermedad crónica hayan abandonado el tabaco a raíz de su diagnóstico, más que el consumo de tabaco siendo necesariamente el origen directo de la condición declarada.
+
+## Análisis multivariante
+
+Para completar el análisis bivariante, se aplica un Análisis de Correspondencias Múltiples (MCA). Esta técnica permite visualizar en un mismo plano las asociaciones entre el hábito de fumar y el resto de variables sociodemográficas y de salud consideradas, revelando qué categorías tienden a agruparse entre sí.
+
+install.packages("FactoMineR")
+install.packages("factoextra")
+
+```{r mca-preparacion}
+library(FactoMineR)
+library(factoextra)
+
+df_mca <- df_final %>%
+  select(Q1_fumar, SEXOa, grupo_edad, NIVEST, C1, C2) %>%
+  filter(complete.cases(.)) %>%
+  droplevels()
+
+mca_res <- MCA(df_mca, graph = FALSE)
+```
+
+```{r mca-varianza, fig.width=7, fig.height=5}
+fviz_eig(mca_res, addlabels = TRUE,
+         title = "Porcentaje de varianza explicada por dimensión")
+```
+
+Las dos primeras dimensiones del Análisis de Correspondencias Múltiples explican un 10,4% 
+y un 7,2% de la inercia total respectivamente (17,6% acumulado). Aunque este porcentaje 
+puede parecer bajo, es un resultado esperable en MCA cuando se trabaja con variables 
+categóricas con múltiples niveles: la información tiende a repartirse entre muchas 
+dimensiones en lugar de concentrarse en las primeras.
+
+De hecho, la caída de varianza entre dimensiones es progresiva (10,4% → 7,2% → 6% → 5,8% → 5,3%), 
+sin un "codo" claro a partir de la segunda dimensión, lo que indica que las dimensiones 3, 4 y 5 
+aportan cantidades de información similares entre sí.
+
+Por ello, el mapa de categorías en dos dimensiones (Dim 1 y Dim 2) debe interpretarse como una 
+simplificación útil para detectar las asociaciones más relevantes entre tabaco, sexo, edad, 
+nivel de estudios y percepción de salud, sin pretender representar la totalidad de las 
+relaciones existentes en los datos.
+
+```{r mca-variables, fig.width=12, fig.height=9}
+fviz_mca_var(mca_res, repel = TRUE,
+             labelsize = 3,
+             title = "Análisis de Correspondencias Múltiples: tabaco y variables asociadas") +
+  theme(plot.title = element_text(size = 13, face = "bold"))
+```
+
+```{r mca-contribucion, fig.width=14, fig.height=11}
+fviz_mca_var(mca_res, col.var = "contrib",
+             gradient.cols = c("#2C5F7C", "#B5654A", "#B85450"),
+             repel = TRUE,
+             labelsize = 2.8,
+             title = "Contribución de las categorías a las dimensiones principales") +
+  theme(plot.title = element_text(size = 13, face = "bold"))
+```
+El gráfico de contribuciones confirma que las categorías más alejadas del centro son las que más peso tienen en la formación de las dos primeras dimensiones: "No sabe leer o escribir", "75+" y "Educación Primaria completa" destacan con los colores más cálidos, lo que indica que, pese a ser categorías minoritarias en la muestra, son las que más definen la estructura del mapa. En contraste, las categorías más frecuentes y cercanas al centro —como "Bueno", "45-64" o "Hombre"— muestran una contribución baja, ya que al ser mayoritarias se sitúan próximas al promedio general y aportan menos información diferenciadora a los ejes. Este patrón es habitual en el MCA: las categorías raras tienden a "estirar" el mapa, mientras que las más comunes quedan concentradas cerca del origen.
